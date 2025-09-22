@@ -258,7 +258,6 @@ export default function Page() {
       )}-${String(d.getDate()).padStart(2, "0")}`;
 
       const { error: insErr } = await supabase.from("entries").insert({
-        id: form.id,
         entry_date,
         site: FIXED_PROJECT,
         area: form.area,
