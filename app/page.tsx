@@ -257,26 +257,31 @@ export default function Page() {
         "0"
       )}-${String(d.getDate()).padStart(2, "0")}`;
 
-      const { error: insErr } = await supabase.from("entries").insert({
-        entry_date,
-        site: FIXED_PROJECT,
-        area: form.area,
-        category_progress: form.categoryProgress,
-        weather: form.weather,
-        obstacles: form.obstacles,
-        notes: form.notes,
-        manpower: form.manpower,
-        safety_incidents: form.safetyIncidents,
-        materials_required: form.materialsRequired,
-        material_items: form.materialItems,
-        photo_urls: uploadedUrls,
-      });
+const { data: inserted, error: insErr } = await supabase
+  .from("entries")
+  .insert({
+    entry_date,
+    site: FIXED_PROJECT,
+    area: form.area,
+    category_progress: form.categoryProgress,
+    weather: form.weather,
+    obstacles: form.obstacles,
+    notes: form.notes,
+    manpower: form.manpower,
+    safety_incidents: form.safetyIncidents,
+    materials_required: form.materialsRequired,
+    material_items: form.materialItems,
+    photo_urls: uploadedUrls,
+  })
+  .select("id")
+  .single();
 
       if (insErr) throw insErr;
 
       // 3) Update UI
       const cleaned: Entry = {
         ...form,
+        id: inserted?.id ?? form.id,
         site: FIXED_PROJECT,
         photos: uploadedUrls,
       };
