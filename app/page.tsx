@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { supabase } from "../lib/supabaseClient";
@@ -87,8 +87,6 @@ export default function Page() {
     materialItems: [],
     photos: [],
   });
-
-  const reportRef = useRef<HTMLDivElement>(null);
 
   /* ----------------------- Startup: load from DB ---------------------- */
 
@@ -243,8 +241,6 @@ export default function Page() {
               contentType: blob.type || "image/jpeg",
             });
           if (upErr) throw upErr;
-        } else {
-          // already a URL (unlikely on first save)
         }
         const { data: pub } = supabase.storage.from("photos").getPublicUrl(path);
         if (pub?.publicUrl) uploadedUrls.push(pub.publicUrl);
@@ -257,24 +253,24 @@ export default function Page() {
         "0"
       )}-${String(d.getDate()).padStart(2, "0")}`;
 
-const { data: inserted, error: insErr } = await supabase
-  .from("entries")
-  .insert({
-    entry_date,
-    site: FIXED_PROJECT,
-    area: form.area,
-    category_progress: form.categoryProgress,
-    weather: form.weather,
-    obstacles: form.obstacles,
-    notes: form.notes,
-    manpower: form.manpower,
-    safety_incidents: form.safetyIncidents,
-    materials_required: form.materialsRequired,
-    material_items: form.materialItems,
-    photo_urls: uploadedUrls,
-  })
-  .select("id")
-  .single();
+      const { data: inserted, error: insErr } = await supabase
+        .from("entries")
+        .insert({
+          entry_date,
+          site: FIXED_PROJECT,
+          area: form.area,
+          category_progress: form.categoryProgress,
+          weather: form.weather,
+          obstacles: form.obstacles,
+          notes: form.notes,
+          manpower: form.manpower,
+          safety_incidents: form.safetyIncidents,
+          materials_required: form.materialsRequired,
+          material_items: form.materialItems,
+          photo_urls: uploadedUrls,
+        })
+        .select("id")
+        .single();
 
       if (insErr) throw insErr;
 
@@ -301,62 +297,99 @@ const { data: inserted, error: insErr } = await supabase
 
   /* ---------------------------- Export helpers --------------------------- */
 
-  const exportJSON = () => {
-    const blob = new Blob([JSON.stringify(entries, null, 2)], {
-      type: "application/json",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    a.download = `daily-report-${yyyy}-${mm}-${dd}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  // wait for all images within a DOM node to finish loading
+  const waitForImages = async (root: HTMLElement) => {
+    const imgs = Array.from(root.querySelectorAll("img"));
+    await Promise.all(
+      imgs.map(
+        (img) =>
+          new Promise<void>((res) => {
+            if (img.complete) return res();
+            img.onload = () => res();
+            img.onerror = () => res();
+          })
+      )
+    );
   };
 
+  // Capture the actual on-screen card for a single entry, or build an off-screen
+  // container (not display:none) for "Export All"
   const generatePDF = async (entry?: Entry) => {
-    const node = reportRef.current;
-    if (!node) return;
-
-    const original = node.innerHTML;
-    if (entry) node.innerHTML = renderReportHTML(entry);
-    else node.innerHTML = renderAllReportsHTML(entries);
-
-    const canvas = await html2canvas(node, {
-      scale: 2,
-      backgroundColor: "#ffffff",
-    });
-    const imgData = canvas.toDataURL("image/png");
     const pdf = new jsPDF({ orientation: "p", unit: "pt", format: "a4" });
-
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
+
+    // A) Single entry → capture its on-screen card
+    if (entry) {
+      const node = document.getElementById(`entry-${entry.id}`);
+      if (!node) return;
+
+      await waitForImages(node);
+
+      const canvas = await html2canvas(node as HTMLElement, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false,
+      });
+
+      const imgData = canvas.toDataURL("image/jpeg", 0.95);
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let y = 0;
+      let remaining = imgHeight;
+      while (remaining > 0) {
+        pdf.addImage(imgData, "JPEG", 0, y ? 0 : 0, imgWidth, imgHeight);
+        remaining -= pageHeight;
+        if (remaining > 0) pdf.addPage();
+        y += pageHeight;
+      }
+
+      const d = new Date(entry.date);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      pdf.save(`Daily-Report_${yyyy}-${mm}-${dd}_${FIXED_PROJECT}.pdf`);
+      return;
+    }
+
+    // B) All entries → render off-screen (NOT display:none)
+    const host = document.createElement("div");
+    host.style.cssText =
+      "position:fixed;left:-9999px;top:0;width:794px;max-width:794px;padding:0;margin:0;background:#fff;z-index:-1;";
+    document.body.appendChild(host);
+
+    host.innerHTML = renderAllReportsHTML(entries);
+    await waitForImages(host);
+
+    const canvas = await html2canvas(host, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false,
+    });
+
+    const imgData = canvas.toDataURL("image/jpeg", 0.95);
     const imgWidth = pageWidth;
     const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-    let remaining = imgHeight;
     let y = 0;
+    let remaining = imgHeight;
     while (remaining > 0) {
-      pdf.addImage(imgData, "PNG", 0, y ? 0 : 0, imgWidth, imgHeight);
+      pdf.addImage(imgData, "JPEG", 0, y ? 0 : 0, imgWidth, imgHeight);
       remaining -= pageHeight;
       if (remaining > 0) pdf.addPage();
       y += pageHeight;
     }
 
-    const d = new Date(entry ? entry.date : Date.now());
+    const d = new Date();
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     const dd = String(d.getDate()).padStart(2, "0");
+    pdf.save(`Daily-Reports_${yyyy}-${mm}-${dd}.pdf`);
 
-    const filename = entry
-      ? `Daily-Report_${yyyy}-${mm}-${dd}_${FIXED_PROJECT}.pdf`
-      : `Daily-Reports_${yyyy}-${mm}-${dd}.pdf`;
-
-    pdf.save(filename);
-    node.innerHTML = original;
+    document.body.removeChild(host);
   };
 
   /* ---------------------------- Weather lookup --------------------------- */
@@ -480,7 +513,7 @@ const { data: inserted, error: insErr } = await supabase
              ${e.photos
                .map(
                  (p) =>
-                   `<img src='${p}' style='width:180px; height:120px; object-fit:cover; border:1px solid #ccc; border-radius:8px;'/>`
+                   `<img src='${p}' crossorigin="anonymous" style='width:180px; height:120px; object-fit:cover; border:1px solid #ccc; border-radius:8px;'/>`
                )
                .join("")}
            </div>
@@ -678,7 +711,7 @@ const { data: inserted, error: insErr } = await supabase
                       type="range"
                       min={0}
                       max={100}
-                      step={5} // <-- increments of 5
+                      step={5} // increments of 5
                       value={prog}
                       onChange={(e) =>
                         setForm((s) => ({
@@ -744,7 +777,7 @@ const { data: inserted, error: insErr } = await supabase
                 placeholder="e.g., 6 workers (2 elec, 2 tile, 2 paint)"
                 value={form.manpower}
                 onChange={(e) =>
-                setForm((s) => ({ ...s, manpower: e.target.value }))
+                  setForm((s) => ({ ...s, manpower: e.target.value }))
                 }
               />
             </div>
@@ -869,7 +902,7 @@ const { data: inserted, error: insErr } = await supabase
               <div className="grid cols-4" style={{ marginTop: 8 }}>
                 {form.photos.map((p, idx) => (
                   <div key={idx}>
-                    <img src={p} className="photo" />
+                    <img src={p} className="photo" crossOrigin="anonymous" />
                     <div style={{ textAlign: "right" }}>
                       <button
                         className="btn"
@@ -926,7 +959,7 @@ const { data: inserted, error: insErr } = await supabase
           </div>
         )}
         {entries.map((e) => (
-          <div key={e.id} className="card">
+          <div key={e.id} id={`entry-${e.id}`} className="card">
             <div className="card-body">
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <div>
@@ -995,7 +1028,7 @@ const { data: inserted, error: insErr } = await supabase
                 <div style={{ marginTop: 8 }}>
                   <div className="grid cols-4">
                     {e.photos.slice(0, 8).map((p, idx) => (
-                      <img key={idx} src={p} className="photo" />
+                      <img key={idx} src={p} className="photo" crossOrigin="anonymous" />
                     ))}
                   </div>
                 </div>
@@ -1018,9 +1051,6 @@ const { data: inserted, error: insErr } = await supabase
           </div>
         ))}
       </div>
-
-      {/* Hidden render target for PDF */}
-      <div ref={reportRef} className="hidden" />
 
       <div className="footer">
         PM:AG Design & Construction • Cloud-saved daily reporting tool.
